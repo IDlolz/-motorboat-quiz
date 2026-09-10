@@ -24,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build static site
+      - name: Build and repair static site
         shell: bash
         run: |
           set -euo pipefail
@@ -37,11 +37,37 @@ jobs:
           gzip -dc /tmp/site.gz > public/index.html
           GZIP_STATUS=$?
           set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('public/index.html')
+          s = p.read_text(encoding='utf-8')
+          marker = 'const IMAGE_CARDS=[];'
+          if "const LETTERS=['A','B','C','D'];" not in s:
+              if marker not in s:
+                  raise SystemExit('IMAGE_CARDS marker missing')
+              s = s.replace(marker, marker + "\nconst LETTERS=['A','B','C','D'];\nconst CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];", 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
           SIZE=$(wc -c < public/index.html)
-          echo "gzip status: $GZIP_STATUS; built $SIZE bytes"
+          echo "gzip status: $GZIP_STATUS; repaired build: $SIZE bytes"
           test "$SIZE" -gt 250000
+          grep -Fq "const LETTERS=['A','B','C','D'];" public/index.html
+          grep -Fq "const CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];" public/index.html
           grep -q "motorboat_quiz_v2" public/index.html
           grep -q "</html>" public/index.html
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s = Path('public/index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script[^>]*>(.*?)</script>', s, re.S | re.I)
+          if not scripts:
+              raise SystemExit('script block missing')
+          Path('/tmp/site.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/site.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
