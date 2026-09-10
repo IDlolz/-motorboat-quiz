@@ -1,18 +1,12 @@
 name: Deploy GitHub Pages
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -23,8 +17,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Build and repair static site
+      - name: Build static site
         shell: bash
         run: |
           set -euo pipefail
@@ -33,55 +26,29 @@ jobs:
           cat quiz01.dat quiz02.dat quiz03.dat quiz04.dat quiz05.dat quiz06.dat quiz07.dat quiz08.dat \
             | tr -d '\r\n\t ' \
             | base64 --decode > /tmp/site.gz
-          set +e
-          gzip -dc /tmp/site.gz > /tmp/site-raw.html
-          GZIP_STATUS=$?
-          set -e
-
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('/tmp/site-raw.html')
-          # The old bundle has a damaged gzip trailer and one malformed UTF-8 byte.
-          # Convert it to clean UTF-8 first; replacement affects only damaged text,
-          # not the JavaScript structure.
-          s = p.read_bytes().decode('utf-8', errors='replace')
-          marker = 'const IMAGE_CARDS=[];'
-          if "const LETTERS=['A','B','C','D'];" not in s:
-              if marker not in s:
-                  raise SystemExit('IMAGE_CARDS marker missing')
-              s = s.replace(marker, marker + "\nconst LETTERS=['A','B','C','D'];\nconst CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];", 1)
-          Path('public/index.html').write_text(s, encoding='utf-8')
-          PY
-
-          SIZE=$(wc -c < public/index.html)
-          echo "gzip status: $GZIP_STATUS; repaired build: $SIZE bytes"
-          test "$SIZE" -gt 250000
+          gzip -t /tmp/site.gz
+          gzip -dc /tmp/site.gz > public/index.html
+          test $(wc -c < public/index.html) -gt 250000
           grep -Fq "const LETTERS=['A','B','C','D'];" public/index.html
           grep -Fq "const CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];" public/index.html
           grep -q "motorboat_quiz_v2" public/index.html
           grep -q "</html>" public/index.html
-
           python3 - <<'PY'
           from pathlib import Path
           import re
-          s = Path('public/index.html').read_text(encoding='utf-8')
-          scripts = re.findall(r'<script[^>]*>(.*?)</script>', s, re.S | re.I)
-          if not scripts:
-              raise SystemExit('script block missing')
-          Path('/tmp/site.js').write_text('\n'.join(scripts), encoding='utf-8')
+          s=Path('public/index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script[^>]*>(.*?)</script>',s,re.S|re.I)
+          Path('/tmp/site.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
           node --check /tmp/site.js
-
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
-
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
-
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
