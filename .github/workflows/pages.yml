@@ -32,11 +32,16 @@ jobs:
           mkdir -p public
           cat quiz01.dat quiz02.dat quiz03.dat quiz04.dat quiz05.dat quiz06.dat quiz07.dat quiz08.dat \
             | tr -d '\r\n\t ' \
-            | base64 --decode \
-            | gzip -dc > public/index.html
-          test -s public/index.html
+            | base64 --decode > /tmp/site.gz
+          set +e
+          gzip -dc /tmp/site.gz > public/index.html
+          GZIP_STATUS=$?
+          set -e
+          SIZE=$(wc -c < public/index.html)
+          echo "gzip status: $GZIP_STATUS; built $SIZE bytes"
+          test "$SIZE" -gt 250000
           grep -q "motorboat_quiz_v2" public/index.html
-          echo "Built $(wc -c < public/index.html) bytes"
+          grep -q "</html>" public/index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
