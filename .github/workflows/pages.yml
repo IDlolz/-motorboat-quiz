@@ -23,14 +23,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Build static site
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public
+          cat quiz01.dat quiz02.dat quiz03.dat quiz04.dat quiz05.dat quiz06.dat quiz07.dat quiz08.dat \
+            | tr -d '\r\n\t ' \
+            | base64 --decode \
+            | gzip -dc > public/index.html
+          test -s public/index.html
+          grep -q "motorboat_quiz_v2" public/index.html
+          echo "Built $(wc -c < public/index.html) bytes"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: public
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
