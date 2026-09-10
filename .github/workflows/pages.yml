@@ -34,20 +34,23 @@ jobs:
             | tr -d '\r\n\t ' \
             | base64 --decode > /tmp/site.gz
           set +e
-          gzip -dc /tmp/site.gz > public/index.html
+          gzip -dc /tmp/site.gz > /tmp/site-raw.html
           GZIP_STATUS=$?
           set -e
 
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('public/index.html')
-          s = p.read_text(encoding='utf-8')
+          p = Path('/tmp/site-raw.html')
+          # The old bundle has a damaged gzip trailer and one malformed UTF-8 byte.
+          # Convert it to clean UTF-8 first; replacement affects only damaged text,
+          # not the JavaScript structure.
+          s = p.read_bytes().decode('utf-8', errors='replace')
           marker = 'const IMAGE_CARDS=[];'
           if "const LETTERS=['A','B','C','D'];" not in s:
               if marker not in s:
                   raise SystemExit('IMAGE_CARDS marker missing')
               s = s.replace(marker, marker + "\nconst LETTERS=['A','B','C','D'];\nconst CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];", 1)
-          p.write_text(s, encoding='utf-8')
+          Path('public/index.html').write_text(s, encoding='utf-8')
           PY
 
           SIZE=$(wc -c < public/index.html)
