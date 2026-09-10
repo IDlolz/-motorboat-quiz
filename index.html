@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>營業用動力小船｜題庫測驗</title>
+<style>
+html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif;background:#f7f8f9;color:#34434b}main{max-width:720px;margin:0 auto;padding:48px 22px;text-align:center}.card{background:#fff;border:1px solid #e1e8eb;border-radius:18px;padding:28px;box-shadow:0 2px 12px rgba(28,58,72,.08)}h1{font-size:24px;margin:0 0 12px}p{line-height:1.7;color:#72838b}.bar{height:8px;border-radius:99px;background:#e8eef1;overflow:hidden;margin:24px 0}.fill{height:100%;width:20%;background:#36a6df;animation:load 1.2s ease-in-out infinite alternate}@keyframes load{to{width:88%}}.err{color:#c45745;white-space:pre-wrap}</style>
+</head>
+<body><main><div class="card"><h1>營業用動力小船題庫測驗</h1><p id="msg">正在載入 115 年題庫與你的答題紀錄…</p><div class="bar" id="bar"><div class="fill"></div></div><p class="err" id="err"></p></div></main>
+<script>
+(async()=>{
+ const msg=document.getElementById('msg'),err=document.getElementById('err');
+ try{
+  if(!('DecompressionStream' in window)) throw new Error('此瀏覽器版本不支援網站解壓縮。請改用最新版 Safari 或 Chrome。');
+  const [a,b]=await Promise.all([fetch('./site1.dat?v=2').then(r=>{if(!r.ok)throw new Error('題庫檔案 1 載入失敗');return r.text()}),fetch('./site2.dat?v=2').then(r=>{if(!r.ok)throw new Error('題庫檔案 2 載入失敗');return r.text()})]);
+  msg.textContent='正在開啟測驗…';
+  const base64=(a+b).replace(/\s/g,'');
+  const raw=atob(base64);const bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const html=await new Response(stream).text();
+  document.open();document.write(html);document.close();
+ }catch(e){document.getElementById('bar').style.display='none';msg.textContent='網站載入失敗';err.textContent=(e&&e.message)||String(e);}
+})();
+</script></body></html>
