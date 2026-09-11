@@ -40,11 +40,107 @@ jobs:
           from pathlib import Path
           p = Path('public/index.html')
           s = p.read_text(encoding='utf-8')
-          old = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.review||state.submitted; const correct=chosen===q.answer;"
-          new = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.submitted||(state.review&&!!chosen); const correct=chosen===q.answer;"
-          if old not in s:
-              raise SystemExit('practice answer-visibility target not found')
-          s = s.replace(old, new, 1)
+
+          # 1) Practice mode: do not reveal the answer before the user selects one.
+          old_show = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.review||state.submitted; const correct=chosen===q.answer;"
+          new_show = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.submitted||(state.review&&!!chosen); const correct=chosen===q.answer;"
+          if old_show in s:
+              s = s.replace(old_show, new_show, 1)
+
+          # 2) Add an anonymous data ID. Each browser profile gets its own namespace.
+          old_storage = """const KEY='motorboat_quiz_v2';
+          const OLD_KEY='motorboat_quiz_v1';
+          const DEFAULT_STORE={wrong:[],history:[],stats:{},active:null};
+          let store=loadStore();
+          let state={screen:'home',mode:'',title:'複習測驗',questions:[],answers:{},index:0,submitted:false,review:false,startTime:0,timeLimit:0,timerHandle:null,sourceArg:null};
+
+          function loadStore(){
+            try{
+              let raw=localStorage.getItem(KEY);
+              if(!raw){
+                const old=localStorage.getItem(OLD_KEY);
+                if(old) raw=old;
+              }
+              const parsed=raw?JSON.parse(raw):{};
+              return Object.assign({},DEFAULT_STORE,parsed,{stats:parsed.stats||{},wrong:parsed.wrong||[],history:parsed.history||[],active:parsed.active||null});
+            }catch(e){return {...DEFAULT_STORE}}
+          }
+          function saveStore(){
+            try{localStorage.setItem(KEY,JSON.stringify(store));return true}
+            catch(e){return false}
+          }
+          """
+          new_storage = """const DEVICE_ID_KEY='motorboat_device_id_v1';
+          const LEGACY_KEYS=['motorboat_quiz_v2','motorboat_quiz_v1'];
+          const DEFAULT_STORE={wrong:[],history:[],stats:{},active:null,createdAt:null,updatedAt:null};
+          function makeDeviceId(){
+            try{if(crypto&&crypto.randomUUID)return crypto.randomUUID()}catch(e){}
+            return 'mb-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,12);
+          }
+          function getDeviceId(){
+            try{
+              let id=localStorage.getItem(DEVICE_ID_KEY);
+              if(!id){id=makeDeviceId();localStorage.setItem(DEVICE_ID_KEY,id)}
+              return id;
+            }catch(e){return makeDeviceId()}
+          }
+          const DEVICE_ID=getDeviceId();
+          const KEY='motorboat_quiz_v3:'+DEVICE_ID;
+          let store=loadStore();
+          let state={screen:'home',mode:'',title:'複習測驗',questions:[],answers:{},index:0,submitted:false,review:false,startTime:0,timeLimit:0,timerHandle:null,sourceArg:null};
+
+          function loadStore(){
+            try{
+              let raw=localStorage.getItem(KEY);
+              if(!raw){
+                for(const k of LEGACY_KEYS){const old=localStorage.getItem(k);if(old){raw=old;break}}
+              }
+              const parsed=raw?JSON.parse(raw):{};
+              const merged=Object.assign({},DEFAULT_STORE,parsed,{stats:parsed.stats||{},wrong:parsed.wrong||[],history:parsed.history||[],active:parsed.active||null});
+              if(!merged.createdAt)merged.createdAt=new Date().toISOString();
+              localStorage.setItem(KEY,JSON.stringify(merged));
+              return merged;
+            }catch(e){return {...DEFAULT_STORE,createdAt:new Date().toISOString()}}
+          }
+          function saveStore(){
+            try{store.updatedAt=new Date().toISOString();localStorage.setItem(KEY,JSON.stringify(store));return true}
+            catch(e){return false}
+          }
+          async function copyDeviceId(){
+            const text=DEVICE_ID;
+            try{await navigator.clipboard.writeText(text);toast('資料 ID 已複製')}
+            catch(e){prompt('請複製你的資料 ID',text)}
+          }
+          """
+          if old_storage not in s:
+              raise SystemExit('storage target not found')
+          s = s.replace(old_storage, new_storage, 1)
+
+          # 3) Show the anonymous profile on the home screen.
+          css_marker = '.progressPanel{margin:18px 0 22px;'
+          profile_css = ".profilePanel{margin:0 0 18px;background:#fff;border:1px solid #e0e7ea;border-radius:16px;padding:15px 16px;box-shadow:var(--shadow)}\n.profileRow{display:flex;align-items:center;justify-content:space-between;gap:12px}\n.profileMeta{min-width:0}.profileMeta b{display:block;font-size:14px;color:#34434b}.profileId{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#7c8d95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:290px;margin-top:4px}\n.copyIdBtn{border:0;border-radius:9px;background:#eef7fb;color:#2689bb;padding:9px 11px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}\n.syncBadge{display:inline-flex;align-items:center;gap:5px;margin-top:7px;font-size:12px;color:#71838c}.syncDot{width:7px;height:7px;border-radius:50%;background:#f0a34a;display:inline-block}\n"
+          if css_marker not in s:
+              raise SystemExit('CSS insertion target not found')
+          s = s.replace(css_marker, profile_css + css_marker, 1)
+
+          old_home = '<div class="home"><div class="hero"><h1>營業用動力小船｜題庫測驗</h1><p>作答會自動儲存。關閉後再次用同一瀏覽器開啟這個網站，可繼續查看錯題、歷史成績與各題答題統計。</p><div class="countPill">收錄 ${QUESTION_BANK.length} 題可獨立作答的文字題</div></div>\n <div class="progressPanel">'
+          new_home = '<div class="home"><div class="hero"><h1>營業用動力小船｜題庫測驗</h1><p>每個瀏覽器會自動建立獨立的匿名資料 ID，答題紀錄互不混用。</p><div class="countPill">收錄 ${QUESTION_BANK.length} 題可獨立作答的文字題</div></div>\n <div class="profilePanel"><div class="profileRow"><div class="profileMeta"><b>匿名資料 ID</b><div class="profileId">${escapeHtml(DEVICE_ID)}</div><div class="syncBadge"><span class="syncDot"></span>本機獨立保存；雲端同步待連接資料庫</div></div><button class="copyIdBtn" id="copyIdBtn">複製 ID</button></div></div>\n <div class="progressPanel">'
+          if old_home not in s:
+              raise SystemExit('home insertion target not found')
+          s = s.replace(old_home, new_home, 1)
+
+          s = s.replace('※ 紀錄保存在目前瀏覽器的網站儲存空間。若清除瀏覽器網站資料、改用另一台裝置或另一個瀏覽器，紀錄不會自動同步。', '※ 每個瀏覽器都有獨立匿名資料 ID。換 IP、Wi‑Fi 或 5G 不會影響紀錄；清除瀏覽器網站資料或換裝置時，目前仍不會自動同步。', 1)
+
+          bind_target = "const rs=document.getElementById('resumeBtn');if(rs)rs.onclick=restoreSession;"
+          if bind_target not in s:
+              raise SystemExit('bind target not found')
+          s = s.replace(bind_target, bind_target + "\n const cid=document.getElementById('copyIdBtn');if(cid)cid.onclick=copyDeviceId;", 1)
+
+          clear_old = "store={wrong:[],history:[],stats:{},active:null};saveStore();toast('已清除');home()"
+          clear_new = "store={...DEFAULT_STORE,createdAt:new Date().toISOString()};saveStore();toast('已清除');home()"
+          if clear_old in s:
+              s = s.replace(clear_old, clear_new, 1)
+
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -52,11 +148,13 @@ jobs:
           grep -Fq "const LETTERS=['A','B','C','D'];" public/index.html
           grep -Fq "const CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];" public/index.html
           grep -Fq "const show=state.submitted||(state.review&&!!chosen);" public/index.html
+          grep -Fq "motorboat_device_id_v1" public/index.html
+          grep -Fq "motorboat_quiz_v3:" public/index.html
+          grep -Fq "匿名資料 ID" public/index.html
           if grep -Fq "const show=state.review||state.submitted;" public/index.html; then
             echo "old answer-reveal logic still present"
             exit 1
           fi
-          grep -q "motorboat_quiz_v2" public/index.html
           grep -q "</html>" public/index.html
 
           python3 - <<'PY'
