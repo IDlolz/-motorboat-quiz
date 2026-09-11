@@ -152,18 +152,29 @@ def main() -> None:
 
     site_html = site_path.read_text(encoding="utf-8")
     site_questions = extract_site_questions(site_html)
-    site_by_locator: dict[str, dict] = {}
-    duplicate_locators: set[str] = set()
+    site_candidates: dict[str, list[dict]] = {}
     for question in site_questions:
         locator = site_locator(question)
-        if not locator:
-            continue
-        if locator in site_by_locator:
-            duplicate_locators.add(locator)
+        if locator:
+            site_candidates.setdefault(locator, []).append(question)
+
+    # Only the 57 verified image locations must be unique. Existing duplicates
+    # elsewhere in the bank are unrelated and must not block image deployment.
+    site_by_locator: dict[str, dict] = {}
+    missing_site: list[str] = []
+    ambiguous_site: dict[str, int] = {}
+    for locator in sorted(EXPECTED_IMAGE_LOCATORS):
+        candidates = site_candidates.get(locator, [])
+        if not candidates:
+            missing_site.append(locator)
+        elif len(candidates) > 1:
+            ambiguous_site[locator] = len(candidates)
         else:
-            site_by_locator[locator] = question
-    if duplicate_locators:
-        raise RuntimeError(f"Duplicate stable-site question locators: {sorted(duplicate_locators)[:20]}")
+            site_by_locator[locator] = candidates[0]
+    if missing_site:
+        raise RuntimeError(f"Stable site is missing expected image-question locations: {missing_site}")
+    if ambiguous_site:
+        raise RuntimeError(f"Image-question locations are ambiguous in stable site: {ambiguous_site}")
 
     source_html = fetch_bytes(SOURCE_URL).decode("utf-8", errors="ignore")
     payload = extract_reference_payload(source_html)
@@ -187,10 +198,6 @@ def main() -> None:
         missing = sorted(EXPECTED_IMAGE_LOCATORS - reference_locators)
         extra = sorted(reference_locators - EXPECTED_IMAGE_LOCATORS)
         raise RuntimeError(f"Reference image locator set changed; missing={missing}, extra={extra}")
-
-    missing_site = sorted(EXPECTED_IMAGE_LOCATORS - set(site_by_locator))
-    if missing_site:
-        raise RuntimeError(f"Stable site is missing expected image-question locations: {missing_site}")
 
     resources = ((payload.get("rs") or {}).get("i") or {})
     all_refs: set[str] = set()
