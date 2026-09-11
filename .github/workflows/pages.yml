@@ -35,11 +35,30 @@ jobs:
             | base64 --decode > /tmp/site.gz
           gzip -t /tmp/site.gz
           gzip -dc /tmp/site.gz > public/index.html
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('public/index.html')
+          s = p.read_text(encoding='utf-8')
+          old = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.review||state.submitted; const correct=chosen===q.answer;"
+          new = "const q=state.questions[state.index], chosen=state.answers[q.id]; const show=state.submitted||(state.review&&!!chosen); const correct=chosen===q.answer;"
+          if old not in s:
+              raise SystemExit('practice answer-visibility target not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
           test $(wc -c < public/index.html) -gt 250000
           grep -Fq "const LETTERS=['A','B','C','D'];" public/index.html
           grep -Fq "const CHAPTERS=[...new Set(QUESTION_BANK.map(q=>q.chapter))];" public/index.html
+          grep -Fq "const show=state.submitted||(state.review&&!!chosen);" public/index.html
+          if grep -Fq "const show=state.review||state.submitted;" public/index.html; then
+            echo "old answer-reveal logic still present"
+            exit 1
+          fi
           grep -q "motorboat_quiz_v2" public/index.html
           grep -q "</html>" public/index.html
+
           python3 - <<'PY'
           from pathlib import Path
           import re
