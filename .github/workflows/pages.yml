@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
           rm -rf public
           mkdir -p public
-          cat clean01.dat clean02.dat clean03.dat clean04.dat clean05.dat clean06.dat clean07.dat clean08.dat \
+          cat clean01.dat clean02.dat clean03.dat clean04.dat clean05.dat clean06.dat clean07.dat clean08.dat clean09.dat clean10.dat clean11.dat clean12.dat \
             | tr -d '\r\n\t ' \
             | base64 --decode > /tmp/site.gz
           gzip -t /tmp/site.gz
@@ -195,6 +195,9 @@ jobs:
           grep -Fq "const show=state.submitted||(state.review&&!!chosen);" public/index.html
           grep -Fq "ziuulehcejtpkjjmwyxi.supabase.co/functions/v1/quiz-sync" public/index.html
           grep -Fq "使用既有 ID" public/index.html
+          grep -Fq "線上題庫" public/index.html
+          grep -Fq "BANK_PAGE_SIZE=40" public/index.html
+          grep -Fq "function renderBank()" public/index.html
           if grep -Fq "const show=state.review||state.submitted;" public/index.html; then
             echo "old answer-reveal logic still present"
             exit 1
