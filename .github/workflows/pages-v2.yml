@@ -1,0 +1,82 @@
+name: Deploy GitHub Pages v2
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-v2"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build from current stable site
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public
+          curl -LfsS --retry 4 --retry-delay 2 "https://idlolz.github.io/-motorboat-quiz/?bootstrap=${GITHUB_SHA}" -o public/index.html
+          cp bank-addon.js public/bank-addon.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re
+          p=Path('public/index.html')
+          s=p.read_text(encoding='utf-8')
+          s=re.sub(r'<script[^>]+src=["\'][^"\']*bank-addon\.js[^"\']*["\'][^>]*></script>','',s,flags=re.I)
+          if '</body>' not in s.lower():
+              raise SystemExit('body close tag missing')
+          tag=f'<script src="bank-addon.js?v={os.environ.get("GITHUB_SHA","bank")}"></script>'
+          i=s.lower().rfind('</body>')
+          s=s[:i]+tag+s[i:]
+          p.write_text(s,encoding='utf-8')
+          PY
+          test $(wc -c < public/index.html) -gt 200000
+          grep -Fq "ziuulehcejtpkjjmwyxi.supabase.co/functions/v1/quiz-sync" public/index.html
+          grep -Fq "motorboat_quiz_v3" public/index.html
+          if grep -Fq 'data-start="mechanical"' public/index.html; then
+            echo "mechanical mode unexpectedly present"
+            exit 1
+          fi
+          grep -Fq "線上題庫" public/bank-addon.js
+          grep -Fq "正確答案" public/bank-addon.js
+          grep -Fq "BANK_PAGE_SIZE=40" public/bank-addon.js
+          node --check public/bank-addon.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('public/index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>',s,re.S|re.I)
+          if not scripts:
+              raise SystemExit('inline script block missing')
+          Path('/tmp/site-inline.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/site-inline.js
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
