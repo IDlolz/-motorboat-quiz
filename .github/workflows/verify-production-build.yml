@@ -15,23 +15,81 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build without deploying
+      - name: Build exactly like production without deploying
         shell: bash
         run: |
           set -euo pipefail
           rm -rf public
           mkdir -p public
-          curl -LfsS --retry 4 --retry-delay 2 'https://idlolz.github.io/-motorboat-quiz/?verify=image-full' -o public/index.html
+          curl -LfsS --retry 4 --retry-delay 2 'https://idlolz.github.io/-motorboat-quiz/?verify=image-full-production' -o public/index.html
           cp bank-addon.js public/bank-addon.js
           cp image-addon.js public/image-addon.js
           python3 build-images.py --site public/index.html --out public
 
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re
+          p=Path('public/index.html')
+          s=p.read_text(encoding='utf-8')
+          for name in ('bank-addon','image-addon','image-map'):
+              s=re.sub(rf'<script[^>]+src=["\'][^"\']*{re.escape(name)}\.js[^"\']*["\'][^>]*></script>','',s,flags=re.I)
+          if '</body>' not in s.lower():
+              raise SystemExit('body close tag missing')
+          tags=(
+              '<script src="image-map.js?v=verify"></script>'
+              '<script src="bank-addon.js?v=verify"></script>'
+              '<script src="image-addon.js?v=verify"></script>'
+          )
+          i=s.lower().rfind('</body>')
+          p.write_text(s[:i]+tags+s[i:],encoding='utf-8')
+          PY
+
+          test $(wc -c < public/index.html) -gt 200000
+          grep -Fq "ziuulehcejtpkjjmwyxi.supabase.co/functions/v1/quiz-sync" public/index.html
+          grep -Fq "motorboat_quiz_v3" public/index.html
+          if grep -Fq 'data-start="mechanical"' public/index.html; then
+            echo "mechanical mode unexpectedly present"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,re
+          s=Path('public/index.html').read_text(encoding='utf-8')
+          m=re.search(r'(?:const|let|var)\s+QUESTION_BANK\s*=\s*',s)
+          if not m:
+              raise SystemExit('QUESTION_BANK missing')
+          bank,_=json.JSONDecoder().raw_decode(s[m.end():])
+          if len(bank)!=819:
+              raise SystemExit(f'QUESTION_BANK={len(bank)}, expected 819')
+          ids={str(q.get('id')) for q in bank}
+          for expected in ('2-1-1','2-2-27','6-3-30','7-1-20'):
+              if expected not in ids:
+                  raise SystemExit(f'missing restored question {expected}')
+          PY
+
+          grep -Fq "線上題庫" public/bank-addon.js
+          grep -Fq "正確答案" public/bank-addon.js
+          grep -Fq "BANK_PAGE_SIZE=40" public/bank-addon.js
+          grep -Fq "data-question-id" public/bank-addon.js
+          grep -Fq '"finalQuestions":819' public/image-map.js
           grep -Fq '"imageQuestions":57' public/image-map.js
           grep -Fq '"directQuestions":40' public/image-map.js
           grep -Fq '"optionQuestions":17' public/image-map.js
           grep -Fq '"uniqueImages":104' public/image-map.js
           test "$(find public/images -type f -name '*.jpg' | wc -l)" -eq 104
+
           node --check public/image-map.js
           node --check public/bank-addon.js
           node --check public/image-addon.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('public/index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>',s,re.S|re.I)
+          if not scripts:
+              raise SystemExit('inline script block missing')
+          Path('/tmp/site-inline.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/site-inline.js
           cat public/image-build-stats.json
