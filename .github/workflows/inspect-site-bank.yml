@@ -1,0 +1,40 @@
+name: Inspect stable bank shape
+
+on:
+  push:
+    branches: ["deploy-image-full"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print stable QUESTION_BANK shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -LfsS --retry 4 'https://idlolz.github.io/-motorboat-quiz/?inspect=bank-shape' -o /tmp/site.html
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          s=Path('/tmp/site.html').read_text('utf-8')
+          m=re.search(r'(?:const|let|var)\s+QUESTION_BANK\s*=\s*',s)
+          q,_=json.JSONDecoder().raw_decode(s[m.end():])
+          print('count',len(q))
+          print('keys',sorted(q[0].keys()))
+          print('chapters')
+          for x in dict.fromkeys(str(z.get('chapter')) for z in q): print(repr(x))
+          print('sections')
+          for x in list(dict.fromkeys((str(z.get('chapter')),str(z.get('section'))) for z in q))[:50]: print(repr(x))
+          print('first40')
+          for z in q[:40]: print(repr({k:z.get(k) for k in ('id','chapter','section','num','question')}))
+          print('image-like-text')
+          for z in q:
+              t=str(z.get('question') or '')
+              if '如下圖' in t or '下圖' in t or '圖示' in t:
+                  print(repr({k:z.get(k) for k in ('id','chapter','section','num','question')}))
+                  if sum(1 for _ in [0])>20: break
+          PY
