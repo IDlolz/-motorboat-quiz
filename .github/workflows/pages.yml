@@ -47,6 +47,20 @@ jobs:
               raise SystemExit('practice answer-visibility target not found')
           s = s.replace(old, new, 1)
 
+          mech_helper = "function isMechanical(q){return q.chapter.startsWith('五、')}\n"
+          mech_logic = "  if(kind==='mechanical'){pool=QUESTION_BANK.filter(isMechanical);n=50;title='機械加強';review=true}\n"
+          mech_button = '  <button class="mode mecha" data-start="mechanical"><strong>機械加強 50 題</strong><span>只抽「船機常識」：內燃機、操作運轉、維修故障。</span></button>\n'
+          mech_css = ".mode.mecha{border-color:#f3c37a;background:#fff9ef}"
+          for target, label in [(mech_helper,'helper'),(mech_logic,'logic'),(mech_button,'button'),(mech_css,'css')]:
+              if target not in s:
+                  raise SystemExit('mechanical removal target missing: '+label)
+              s = s.replace(target, '', 1)
+          restore_old = "function restoreSession(){\n  const a=store.active;\n"
+          restore_new = "function restoreSession(){\n  const a=store.active;\n  if(a&&a.mode==='mechanical'){store.active=null;saveStore();toast('機械加強模式已移除');render();return}\n"
+          if restore_old not in s:
+              raise SystemExit('restore session target missing')
+          s = s.replace(restore_old, restore_new, 1)
+
           cloud = r'''
           (()=>{
           const CLOUD_SYNC_URL='https://ziuulehcejtpkjjmwyxi.supabase.co/functions/v1/quiz-sync';
@@ -183,6 +197,14 @@ jobs:
           grep -Fq "使用既有 ID" public/index.html
           if grep -Fq "const show=state.review||state.submitted;" public/index.html; then
             echo "old answer-reveal logic still present"
+            exit 1
+          fi
+          if grep -Fq "data-start=\"mechanical\"" public/index.html; then
+            echo "mechanical mode button still present"
+            exit 1
+          fi
+          if grep -Fq "kind==='mechanical'" public/index.html; then
+            echo "mechanical mode logic still present"
             exit 1
           fi
           grep -q "motorboat_quiz_v3" public/index.html
