@@ -19,11 +19,9 @@ EXPECTED_OPTION = 17
 EXPECTED_IMAGE_QUESTIONS = 57
 EXPECTED_UNIQUE_FILES = 104
 
-# These 57 IDs were extracted from the previously verified full image version.
-# The reference quiz groups are numbered like 2.01, 3.02, 6.03 and the item
-# position in each group is the question number, so the reference source can be
-# mapped to our bank deterministically without guessing from question wording.
-EXPECTED_IMAGE_IDS = {
+# Verified image-question locations from the previously approved full version.
+# Format: chapter-section-questionNumber.
+EXPECTED_IMAGE_LOCATORS = {
     "2-1-1","2-1-2","2-1-3","2-1-4","2-1-5","2-1-6","2-1-8","2-1-10","2-1-11","2-1-16","2-1-17","2-1-33","2-1-34","2-1-35","2-1-45",
     "2-2-2","2-2-3","2-2-4","2-2-5","2-2-9","2-2-11","2-2-12","2-2-16","2-2-17","2-2-18","2-2-19","2-2-21","2-2-22","2-2-23","2-2-24","2-2-26","2-2-27",
     "3-1-27","3-1-28","3-1-39","3-2-5","3-2-10","3-2-45","3-2-46",
@@ -32,11 +30,40 @@ EXPECTED_IMAGE_IDS = {
     "7-1-20",
 }
 
+CN_NUM = {"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
+
 
 def normalize_text(value: str) -> str:
     value = html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
     value = unicodedata.normalize("NFKC", value).lower()
     return "".join(ch for ch in value if ch.isalnum())
+
+
+def chapter_number(value: str) -> int | None:
+    value = unicodedata.normalize("NFKC", str(value or "")).strip()
+    m = re.match(r"^([一二三四五六七八九十]+)[、.．]", value)
+    if not m:
+        return None
+    token = m.group(1)
+    if token in CN_NUM:
+        return CN_NUM[token]
+    if token.startswith("十") and len(token) == 2 and token[1] in CN_NUM:
+        return 10 + CN_NUM[token[1]]
+    if token.endswith("十") and len(token) == 2 and token[0] in CN_NUM:
+        return CN_NUM[token[0]] * 10
+    return None
+
+
+def site_locator(question: dict) -> str | None:
+    chapter = chapter_number(question.get("chapter", ""))
+    section_match = re.match(r"^\s*(\d+)", unicodedata.normalize("NFKC", str(question.get("section") or "")))
+    try:
+        number = int(question.get("num"))
+    except (TypeError, ValueError):
+        return None
+    if chapter is None or not section_match:
+        return None
+    return f"{chapter}-{int(section_match.group(1))}-{number}"
 
 
 def fetch_bytes(url: str, retries: int = 4) -> bytes:
@@ -71,8 +98,7 @@ def extract_site_questions(site_html: str) -> list[dict]:
     match = re.search(r"(?:const|let|var)\s+QUESTION_BANK\s*=\s*", site_html)
     if not match:
         raise RuntimeError("QUESTION_BANK was not found in stable site HTML")
-    decoder = json.JSONDecoder()
-    questions, _ = decoder.raw_decode(site_html[match.end():])
+    questions, _ = json.JSONDecoder().raw_decode(site_html[match.end():])
     if not isinstance(questions, list) or len(questions) < 700:
         raise RuntimeError(f"Unexpected QUESTION_BANK size: {len(questions) if isinstance(questions, list) else 'not-list'}")
     return questions
@@ -106,7 +132,7 @@ def collect_reference_image_questions(payload: dict) -> list[dict]:
             direct, options = image_refs(question)
             if direct or any(options):
                 result.append({
-                    "id": f"{chapter}-{section}-{item_number}",
+                    "locator": f"{chapter}-{section}-{item_number}",
                     "direct": direct,
                     "options": options,
                 })
@@ -126,7 +152,18 @@ def main() -> None:
 
     site_html = site_path.read_text(encoding="utf-8")
     site_questions = extract_site_questions(site_html)
-    site_by_id = {str(q.get("id")): q for q in site_questions if q.get("id")}
+    site_by_locator: dict[str, dict] = {}
+    duplicate_locators: set[str] = set()
+    for question in site_questions:
+        locator = site_locator(question)
+        if not locator:
+            continue
+        if locator in site_by_locator:
+            duplicate_locators.add(locator)
+        else:
+            site_by_locator[locator] = question
+    if duplicate_locators:
+        raise RuntimeError(f"Duplicate stable-site question locators: {sorted(duplicate_locators)[:20]}")
 
     source_html = fetch_bytes(SOURCE_URL).decode("utf-8", errors="ignore")
     payload = extract_reference_payload(source_html)
@@ -145,15 +182,15 @@ def main() -> None:
             f"Reference image-question counts changed: direct={direct_count}, option={option_count}, both={both_count}, total={len(reference)}"
         )
 
-    reference_ids = {item["id"] for item in reference}
-    if reference_ids != EXPECTED_IMAGE_IDS:
-        missing = sorted(EXPECTED_IMAGE_IDS - reference_ids)
-        extra = sorted(reference_ids - EXPECTED_IMAGE_IDS)
-        raise RuntimeError(f"Reference image ID set changed; missing={missing}, extra={extra}")
+    reference_locators = {item["locator"] for item in reference}
+    if reference_locators != EXPECTED_IMAGE_LOCATORS:
+        missing = sorted(EXPECTED_IMAGE_LOCATORS - reference_locators)
+        extra = sorted(reference_locators - EXPECTED_IMAGE_LOCATORS)
+        raise RuntimeError(f"Reference image locator set changed; missing={missing}, extra={extra}")
 
-    missing_site_ids = sorted(EXPECTED_IMAGE_IDS - set(site_by_id))
-    if missing_site_ids:
-        raise RuntimeError(f"Stable site is missing expected image-question IDs: {missing_site_ids}")
+    missing_site = sorted(EXPECTED_IMAGE_LOCATORS - set(site_by_locator))
+    if missing_site:
+        raise RuntimeError(f"Stable site is missing expected image-question locations: {missing_site}")
 
     resources = ((payload.get("rs") or {}).get("i") or {})
     all_refs: set[str] = set()
@@ -194,34 +231,40 @@ def main() -> None:
 
     by_id: dict[str, dict] = {}
     by_key: dict[str, dict] = {}
+    by_locator: dict[str, dict] = {}
     for item in reference:
-        site = site_by_id[item["id"]]
+        site = site_by_locator[item["locator"]]
         media = {
             "question": ref_to_path.get(item["direct"]) if item["direct"] else None,
             "options": [ref_to_path.get(x) if x else None for x in item["options"]],
         }
         while media["options"] and media["options"][-1] is None:
             media["options"].pop()
-        key = normalize_text(site.get("question", ""))
-        if not key:
-            raise RuntimeError(f"Stable-site question has no usable text: {item['id']}")
-        by_id[item["id"]] = media
-        by_key[key] = media
 
-    if len(by_id) != EXPECTED_IMAGE_QUESTIONS or len(by_key) != EXPECTED_IMAGE_QUESTIONS:
-        raise RuntimeError(f"Final image map size mismatch: byId={len(by_id)}, byKey={len(by_key)}")
+        actual_id = str(site.get("id") or "")
+        key = normalize_text(site.get("question", ""))
+        if not actual_id or not key:
+            raise RuntimeError(f"Stable-site question has no usable id/text at {item['locator']}")
+        by_id[actual_id] = media
+        by_key[key] = media
+        by_locator[item["locator"]] = media
+
+    if len(by_locator) != EXPECTED_IMAGE_QUESTIONS or len(by_key) != EXPECTED_IMAGE_QUESTIONS:
+        raise RuntimeError(
+            f"Final image map size mismatch: byId={len(by_id)}, byKey={len(by_key)}, byLocator={len(by_locator)}"
+        )
 
     stats = {
         "siteQuestions": len(site_questions),
-        "imageQuestions": len(by_id),
+        "imageQuestions": len(by_locator),
         "directQuestions": direct_count,
         "optionQuestions": option_count,
         "uniqueImages": len(all_refs),
         "imageBytes": total_bytes,
-        "idMatches": len(by_id),
-        "expectedIdSetVerified": True,
+        "locatorMatches": len(by_locator),
+        "expectedLocatorSetVerified": True,
     }
-    bundle = {"byId": by_id, "byKey": by_key, "stats": stats}
+    bundle = {"byId": by_id, "byKey": by_key, "byLocator": by_locator, "stats": stats}
     js = "window.__MOTORBOAT_IMAGE_MAP__=" + json.dumps(bundle, ensure_ascii=False, separators=(",", ":")) + ";\n"
     (out_dir / "image-map.js").write_text(js, encoding="utf-8")
     (out_dir / "image-build-stats.json").write_text(
