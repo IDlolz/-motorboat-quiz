@@ -80,13 +80,33 @@ jobs:
             exit 1
           fi
 
+          # Verify that the live 766-question bank has been expanded to the
+          # complete 819-question bank and remains 819 on future rebuilds.
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,re
+          s=Path('public/index.html').read_text(encoding='utf-8')
+          m=re.search(r'(?:const|let|var)\s+QUESTION_BANK\s*=\s*',s)
+          if not m:
+              raise SystemExit('QUESTION_BANK missing after build')
+          bank,_=json.JSONDecoder().raw_decode(s[m.end():])
+          if len(bank)!=819:
+              raise SystemExit(f'QUESTION_BANK has {len(bank)} questions, expected 819')
+          ids={str(q.get('id')) for q in bank}
+          for expected in ('2-1-1','2-2-27','6-3-30','7-1-20'):
+              if expected not in ids:
+                  raise SystemExit(f'restored image question missing: {expected}')
+          PY
+
           # Online-bank checks.
           grep -Fq "線上題庫" public/bank-addon.js
           grep -Fq "正確答案" public/bank-addon.js
           grep -Fq "BANK_PAGE_SIZE=40" public/bank-addon.js
+          grep -Fq "data-question-id" public/bank-addon.js
 
           # Full image-question checks: 40 question images + 17 option-image
           # questions = 57 image questions and 104 unique JPEG assets.
+          grep -Fq '"finalQuestions":819' public/image-map.js
           grep -Fq '"imageQuestions":57' public/image-map.js
           grep -Fq '"directQuestions":40' public/image-map.js
           grep -Fq '"optionQuestions":17' public/image-map.js
