@@ -14,8 +14,8 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 SOURCE_URL = "https://www.motorboatdrivertest.com/business/exam/index.html"
-EXPECTED_BASE_QUESTIONS = 766
-EXPECTED_ADDED_QUESTIONS = 53
+INITIAL_BASE_QUESTIONS = 766
+INITIAL_MISSING_IMAGE_QUESTIONS = 53
 EXPECTED_FINAL_QUESTIONS = 819
 EXPECTED_DIRECT = 40
 EXPECTED_OPTION = 17
@@ -206,8 +206,11 @@ def main() -> None:
     site_html = site_path.read_text(encoding="utf-8")
     site_questions, bank_start, bank_end = extract_site_bank(site_html)
     base_count = len(site_questions)
-    if base_count != EXPECTED_BASE_QUESTIONS:
-        raise RuntimeError(f"Stable QUESTION_BANK size changed: {base_count} != {EXPECTED_BASE_QUESTIONS}")
+    if base_count not in (INITIAL_BASE_QUESTIONS, EXPECTED_FINAL_QUESTIONS):
+        raise RuntimeError(
+            f"Stable QUESTION_BANK size changed unexpectedly: {base_count}; "
+            f"expected {INITIAL_BASE_QUESTIONS} before first image deployment or {EXPECTED_FINAL_QUESTIONS} afterwards"
+        )
 
     chapter_labels: dict[int, str] = {}
     section_labels: dict[tuple[int, int], str] = {}
@@ -250,10 +253,15 @@ def main() -> None:
     reference_by_locator = {item["locator"]: item for item in reference}
     present_image_locators = {locator for locator in EXPECTED_IMAGE_LOCATORS if existing_locators.get(locator)}
     missing_image_locators = sorted(EXPECTED_IMAGE_LOCATORS - present_image_locators, key=locator_tuple)
-    if len(missing_image_locators) != EXPECTED_ADDED_QUESTIONS:
+
+    if base_count == INITIAL_BASE_QUESTIONS and len(missing_image_locators) != INITIAL_MISSING_IMAGE_QUESTIONS:
         raise RuntimeError(
-            f"Expected {EXPECTED_ADDED_QUESTIONS} missing image questions, found {len(missing_image_locators)}; "
-            f"present={len(present_image_locators)}"
+            f"Initial site should be missing {INITIAL_MISSING_IMAGE_QUESTIONS} image questions, "
+            f"found {len(missing_image_locators)}"
+        )
+    if base_count == EXPECTED_FINAL_QUESTIONS and missing_image_locators:
+        raise RuntimeError(
+            f"Already-expanded site is missing image questions: {missing_image_locators}"
         )
 
     added: list[dict] = []
