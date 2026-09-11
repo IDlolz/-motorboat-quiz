@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import base64
 import concurrent.futures
-import difflib
 import html
 import json
 import re
@@ -19,6 +18,19 @@ EXPECTED_DIRECT = 40
 EXPECTED_OPTION = 17
 EXPECTED_IMAGE_QUESTIONS = 57
 EXPECTED_UNIQUE_FILES = 104
+
+# These 57 IDs were extracted from the previously verified full image version.
+# The reference quiz groups are numbered like 2.01, 3.02, 6.03 and the item
+# position in each group is the question number, so the reference source can be
+# mapped to our bank deterministically without guessing from question wording.
+EXPECTED_IMAGE_IDS = {
+    "2-1-1","2-1-2","2-1-3","2-1-4","2-1-5","2-1-6","2-1-8","2-1-10","2-1-11","2-1-16","2-1-17","2-1-33","2-1-34","2-1-35","2-1-45",
+    "2-2-2","2-2-3","2-2-4","2-2-5","2-2-9","2-2-11","2-2-12","2-2-16","2-2-17","2-2-18","2-2-19","2-2-21","2-2-22","2-2-23","2-2-24","2-2-26","2-2-27",
+    "3-1-27","3-1-28","3-1-39","3-2-5","3-2-10","3-2-45","3-2-46",
+    "4-1-20","4-1-28",
+    "6-1-5","6-1-6","6-1-7","6-1-8","6-2-19","6-2-20","6-2-23","6-3-6","6-3-13","6-3-19","6-3-20","6-3-21","6-3-22","6-3-23","6-3-30",
+    "7-1-20",
+}
 
 
 def normalize_text(value: str) -> str:
@@ -66,14 +78,6 @@ def extract_site_questions(site_html: str) -> list[dict]:
     return questions
 
 
-def reference_question_text(question: dict) -> str:
-    data = question.get("D") or {}
-    plain = data.get("d")
-    if isinstance(plain, list) and plain:
-        return " ".join(str(x) for x in plain if x is not None).strip()
-    return re.sub(r"<[^>]+>", " ", data.get("a") or data.get("h") or "").strip()
-
-
 def image_refs(question: dict) -> tuple[str | None, list[str | None]]:
     direct = (((question.get("at") or {}).get("i") or {}).get("i"))
     options: list[str | None] = []
@@ -86,59 +90,27 @@ def image_refs(question: dict) -> tuple[str | None, list[str | None]]:
 
 def collect_reference_image_questions(payload: dict) -> list[dict]:
     result = []
-    for group in (((payload.get("d") or {}).get("sl") or {}).get("g") or []):
-        for question in group.get("S", []) if isinstance(group, dict) else []:
+    groups = (((payload.get("d") or {}).get("sl") or {}).get("g") or [])
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        title = unicodedata.normalize("NFKC", str(group.get("T") or ""))
+        number = re.match(r"^\s*(\d+)\.(\d+)", title)
+        if not number:
+            continue
+        chapter = int(number.group(1))
+        section = int(number.group(2))
+        for item_number, question in enumerate(group.get("S") or [], start=1):
             if not isinstance(question, dict) or not question.get("D"):
                 continue
             direct, options = image_refs(question)
             if direct or any(options):
                 result.append({
-                    "text": reference_question_text(question),
+                    "id": f"{chapter}-{section}-{item_number}",
                     "direct": direct,
                     "options": options,
                 })
     return result
-
-
-def match_questions(reference: list[dict], site_questions: list[dict]) -> list[tuple[dict, dict, str]]:
-    by_key: dict[str, list[dict]] = {}
-    site_keys: list[tuple[str, dict]] = []
-    for question in site_questions:
-        key = normalize_text(question.get("question", ""))
-        if not key:
-            continue
-        by_key.setdefault(key, []).append(question)
-        site_keys.append((key, question))
-
-    matched: list[tuple[dict, dict, str]] = []
-    used_ids: set[str] = set()
-    for ref in reference:
-        ref_key = normalize_text(ref["text"])
-        exact = [q for q in by_key.get(ref_key, []) if q.get("id") not in used_ids]
-        if len(exact) == 1:
-            site = exact[0]
-            method = "exact"
-        else:
-            scored = []
-            for key, candidate in site_keys:
-                if candidate.get("id") in used_ids:
-                    continue
-                ratio = difflib.SequenceMatcher(None, ref_key, key).ratio()
-                scored.append((ratio, candidate, key))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            if not scored:
-                raise RuntimeError(f"No site candidate for image question: {ref['text']}")
-            best = scored[0]
-            second = scored[1][0] if len(scored) > 1 else 0.0
-            if best[0] < 0.94 or best[0] - second < 0.015:
-                raise RuntimeError(
-                    f"Unsafe fuzzy match ({best[0]:.3f}/{second:.3f}) for: {ref['text']} -> {best[1].get('question')}"
-                )
-            site = best[1]
-            method = f"fuzzy:{best[0]:.3f}"
-        used_ids.add(str(site.get("id")))
-        matched.append((ref, site, method))
-    return matched
 
 
 def main() -> None:
@@ -154,6 +126,8 @@ def main() -> None:
 
     site_html = site_path.read_text(encoding="utf-8")
     site_questions = extract_site_questions(site_html)
+    site_by_id = {str(q.get("id")): q for q in site_questions if q.get("id")}
+
     source_html = fetch_bytes(SOURCE_URL).decode("utf-8", errors="ignore")
     payload = extract_reference_payload(source_html)
     reference = collect_reference_image_questions(payload)
@@ -171,16 +145,22 @@ def main() -> None:
             f"Reference image-question counts changed: direct={direct_count}, option={option_count}, both={both_count}, total={len(reference)}"
         )
 
-    matched = match_questions(reference, site_questions)
-    if len(matched) != EXPECTED_IMAGE_QUESTIONS:
-        raise RuntimeError(f"Matched {len(matched)} image questions, expected {EXPECTED_IMAGE_QUESTIONS}")
+    reference_ids = {item["id"] for item in reference}
+    if reference_ids != EXPECTED_IMAGE_IDS:
+        missing = sorted(EXPECTED_IMAGE_IDS - reference_ids)
+        extra = sorted(reference_ids - EXPECTED_IMAGE_IDS)
+        raise RuntimeError(f"Reference image ID set changed; missing={missing}, extra={extra}")
+
+    missing_site_ids = sorted(EXPECTED_IMAGE_IDS - set(site_by_id))
+    if missing_site_ids:
+        raise RuntimeError(f"Stable site is missing expected image-question IDs: {missing_site_ids}")
 
     resources = ((payload.get("rs") or {}).get("i") or {})
     all_refs: set[str] = set()
-    for ref, _, _ in matched:
-        if ref["direct"]:
-            all_refs.add(ref["direct"])
-        all_refs.update(x for x in ref["options"] if x)
+    for item in reference:
+        if item["direct"]:
+            all_refs.add(item["direct"])
+        all_refs.update(x for x in item["options"] if x)
     if len(all_refs) != EXPECTED_UNIQUE_FILES:
         raise RuntimeError(f"Unique image count changed: {len(all_refs)} != {EXPECTED_UNIQUE_FILES}")
 
@@ -214,35 +194,32 @@ def main() -> None:
 
     by_id: dict[str, dict] = {}
     by_key: dict[str, dict] = {}
-    exact_count = 0
-    fuzzy_count = 0
-    for ref, site, method in matched:
-        if method == "exact":
-            exact_count += 1
-        else:
-            fuzzy_count += 1
+    for item in reference:
+        site = site_by_id[item["id"]]
         media = {
-            "question": ref_to_path.get(ref["direct"]) if ref["direct"] else None,
-            "options": [ref_to_path.get(x) if x else None for x in ref["options"]],
+            "question": ref_to_path.get(item["direct"]) if item["direct"] else None,
+            "options": [ref_to_path.get(x) if x else None for x in item["options"]],
         }
         while media["options"] and media["options"][-1] is None:
             media["options"].pop()
-        qid = str(site.get("id") or "")
         key = normalize_text(site.get("question", ""))
-        if not qid or not key:
-            raise RuntimeError("Matched site question is missing id/text")
-        by_id[qid] = media
+        if not key:
+            raise RuntimeError(f"Stable-site question has no usable text: {item['id']}")
+        by_id[item["id"]] = media
         by_key[key] = media
+
+    if len(by_id) != EXPECTED_IMAGE_QUESTIONS or len(by_key) != EXPECTED_IMAGE_QUESTIONS:
+        raise RuntimeError(f"Final image map size mismatch: byId={len(by_id)}, byKey={len(by_key)}")
 
     stats = {
         "siteQuestions": len(site_questions),
-        "imageQuestions": len(matched),
+        "imageQuestions": len(by_id),
         "directQuestions": direct_count,
         "optionQuestions": option_count,
         "uniqueImages": len(all_refs),
         "imageBytes": total_bytes,
-        "exactMatches": exact_count,
-        "fuzzyMatches": fuzzy_count,
+        "idMatches": len(by_id),
+        "expectedIdSetVerified": True,
     }
     bundle = {"byId": by_id, "byKey": by_key, "stats": stats}
     js = "window.__MOTORBOAT_IMAGE_MAP__=" + json.dumps(bundle, ensure_ascii=False, separators=(",", ":")) + ";\n"
