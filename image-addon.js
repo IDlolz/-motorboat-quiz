@@ -87,7 +87,8 @@
     document.querySelectorAll('#app .bankCard').forEach(card=>{
       const questionEl=card.querySelector('.bankQuestion');
       if(!questionEl) return;
-      const media=byKey[imageKey(questionEl.textContent)];
+      const questionId=String(card.dataset.questionId||'');
+      const media=byId[questionId]||byKey[imageKey(questionEl.textContent)];
       if(!media) return;
 
       if(media.question&&!card.querySelector('[data-image-addon="bank-question"]')){
