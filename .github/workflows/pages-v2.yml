@@ -57,6 +57,35 @@ jobs:
                   flags=re.I,
               )
 
+          # Permanently remove the legacy focus-card feature while keeping the
+          # 57 real image questions and online question bank untouched.
+          s=s.replace('<button data-menu="cards">重點圖卡</button>','')
+          s=s.replace(
+              '<div class="modalMask" id="modalMask"><div class="modal"><h2>重點圖卡</h2><div class="cards" id="cards"></div><button class="closeModal" id="closeModal">關閉</button></div></div>',
+              '',
+          )
+          s=re.sub(r'\n?const IMAGE_CARDS=\[\];\n?', '\n', s)
+          s=re.sub(
+              r"function showCards\(\)\{document\.getElementById\('cards'\)\.innerHTML=IMAGE_CARDS\.map\(x=>`.*?`\)\.join\(''\);document\.getElementById\('modalMask'\)\.classList\.add\('show'\)\}\s*",
+              '',
+              s,
+              flags=re.S,
+          )
+          s=s.replace(
+              "document.getElementById('closeModal').onclick=()=>document.getElementById('modalMask').classList.remove('show');document.getElementById('modalMask').onclick=e=>{if(e.target.id==='modalMask')e.currentTarget.classList.remove('show')};",
+              '',
+          )
+          s=s.replace("if(x==='cards')showCards();",'')
+          s=re.sub(
+              r"\.modalMask\{[^}]*\}\.modalMask\.show\{[^}]*\}\.modal\{[^}]*\}\.modal h2\{[^}]*\}\.cards\{[^}]*\}\.studyImg\{[^}]*\}\.imgTitle\{[^}]*\}\.closeModal\{[^}]*\}",
+              '',
+              s,
+          )
+
+          for marker in ('重點圖卡','IMAGE_CARDS','showCards','closeModal','modalMask','data-menu="cards"'):
+              if marker in s:
+                  raise SystemExit(f'focus-card feature marker still present: {marker}')
+
           if '</body>' not in s.lower():
               raise SystemExit('body close tag missing')
 
@@ -80,8 +109,7 @@ jobs:
             exit 1
           fi
 
-          # Verify that the live 766-question bank has been expanded to the
-          # complete 819-question bank and remains 819 on future rebuilds.
+          # Verify that the complete 819-question bank remains intact.
           python3 - <<'PY'
           from pathlib import Path
           import json,re
@@ -115,7 +143,7 @@ jobs:
           test -s public/image-build-stats.json
 
           # Syntax checks for every JavaScript layer plus the stable site's
-          # inline app code.
+          # inline app code after removing the focus-card feature.
           node --check public/image-map.js
           node --check public/bank-addon.js
           node --check public/image-addon.js
