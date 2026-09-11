@@ -209,7 +209,6 @@ def main() -> None:
     if base_count != EXPECTED_BASE_QUESTIONS:
         raise RuntimeError(f"Stable QUESTION_BANK size changed: {base_count} != {EXPECTED_BASE_QUESTIONS}")
 
-    # Reuse the exact chapter/section labels already used by the live site.
     chapter_labels: dict[int, str] = {}
     section_labels: dict[tuple[int, int], str] = {}
     existing_locators: dict[str, list[dict]] = {}
@@ -248,9 +247,6 @@ def main() -> None:
         extra = sorted(reference_locators - EXPECTED_IMAGE_LOCATORS)
         raise RuntimeError(f"Reference image locator set changed; missing={missing}, extra={extra}")
 
-    # Existing live site intentionally lacks most image questions. Keep any
-    # image question already present exactly as-is, and synthesize only the
-    # missing ones from the verified reference payload.
     reference_by_locator = {item["locator"]: item for item in reference}
     present_image_locators = {locator for locator in EXPECTED_IMAGE_LOCATORS if existing_locators.get(locator)}
     missing_image_locators = sorted(EXPECTED_IMAGE_LOCATORS - present_image_locators, key=locator_tuple)
@@ -280,19 +276,16 @@ def main() -> None:
         })
 
     merged = list(site_questions) + added
-
-    # The live bank is already ordered by chapter/section/question number. Add
-    # the restored questions into the same order without deleting any existing
-    # duplicates or changing unrelated records.
     original_order = {id(question): index for index, question in enumerate(merged)}
+
     def sort_key(question: dict) -> tuple[int, int, int, int]:
         locator = site_locator(question)
         if locator:
             chapter, section, number = locator_tuple(locator)
             return chapter, section, number, original_order[id(question)]
         return 999, 999, 999999, original_order[id(question)]
-    merged.sort(key=sort_key)
 
+    merged.sort(key=sort_key)
     if len(merged) != EXPECTED_FINAL_QUESTIONS:
         raise RuntimeError(f"Final QUESTION_BANK size mismatch: {len(merged)} != {EXPECTED_FINAL_QUESTIONS}")
 
@@ -309,13 +302,10 @@ def main() -> None:
     if ambiguous_images:
         raise RuntimeError(f"Image-question locations are not unique after restore: {ambiguous_images}")
 
-    # Replace the bank literal inside the stable HTML. All existing app logic,
-    # cloud-sync keys, UI and user-history behavior remain untouched.
     merged_json = json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
     patched_html = site_html[:bank_start] + merged_json + site_html[bank_end:]
     site_path.write_text(patched_html, encoding="utf-8")
 
-    # Resolve and download all image resources into the Pages artifact.
     resources = ((payload.get("rs") or {}).get("i") or {})
     all_refs: set[str] = set()
     for item in reference:
@@ -353,11 +343,10 @@ def main() -> None:
         for _, size in pool.map(download, jobs):
             total_bytes += size
 
-    # Build lookup maps using the final 819-question bank. The renderer can use
-    # the live question id in quiz mode and normalized text in reader mode.
     by_id: dict[str, dict] = {}
     by_key: dict[str, dict] = {}
     by_locator: dict[str, dict] = {}
+    blocked_text_keys: set[str] = set()
     for ref in reference:
         locator = ref["locator"]
         site = merged_by_locator[locator][0]
@@ -374,15 +363,22 @@ def main() -> None:
             raise RuntimeError(f"Final image question has no usable id/text at {locator}")
         if actual_id in by_id:
             raise RuntimeError(f"Duplicate image question id: {actual_id}")
-        if key in by_key:
-            raise RuntimeError(f"Duplicate normalized image question text at {locator}")
         by_id[actual_id] = media
-        by_key[key] = media
         by_locator[locator] = media
 
-    if not (len(by_id) == len(by_key) == len(by_locator) == EXPECTED_IMAGE_QUESTIONS):
+        # Text lookup is fallback-only. Repeated wording is deliberately
+        # excluded so it can never select the wrong image. Quiz and online-bank
+        # rendering both use the stable question ID as their primary key.
+        if key not in blocked_text_keys:
+            if key in by_key:
+                by_key.pop(key, None)
+                blocked_text_keys.add(key)
+            else:
+                by_key[key] = media
+
+    if len(by_id) != EXPECTED_IMAGE_QUESTIONS or len(by_locator) != EXPECTED_IMAGE_QUESTIONS:
         raise RuntimeError(
-            f"Final image map size mismatch: byId={len(by_id)}, byKey={len(by_key)}, byLocator={len(by_locator)}"
+            f"Final image map size mismatch: byId={len(by_id)}, byLocator={len(by_locator)}"
         )
 
     stats = {
@@ -395,6 +391,8 @@ def main() -> None:
         "uniqueImages": len(all_refs),
         "imageBytes": total_bytes,
         "existingImageQuestions": len(present_image_locators),
+        "safeTextFallbacks": len(by_key),
+        "ambiguousTextFallbacks": len(blocked_text_keys),
         "expectedLocatorSetVerified": True,
     }
     bundle = {"byId": by_id, "byKey": by_key, "byLocator": by_locator, "stats": stats}
